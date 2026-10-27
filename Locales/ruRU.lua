@@ -1,0 +1,52 @@
+-- PandaMap / Locales/ruRU.lua -- Russian. Missing keys fall back to English.
+PandaMapLocale.Register("ruRU", {
+  ["COMMON_CLOSE"] = "Закрыть",
+
+  ["SETTINGS_PAGE_GENERAL"] = "Общие",
+  ["SETTINGS_PAGE_PACKS"] = "Пакеты",
+  ["SETTINGS_HEADING_WORLD_MAP"] = "Карта мира",
+  ["SETTINGS_REVEAL_FOG"] = "Убрать туман войны",
+  ["SETTINGS_REVEAL_FOG_NOTE"] = "Показывает неисследованные области всех зон на карте мира. "
+    .. "Сам прогресс исследования не меняется. "
+    .. "Если туман войны сохранён, неисследованные области показываются на HD-карте неисследованных земель.",
+  ["SETTINGS_MINIMAP_BUTTON"] = "Показывать кнопку у миникарты",
+  ["SETTINGS_LANGUAGE_CHANGED"] = "язык установлен на %s.",
+  ["SETTINGS_LANGUAGE_RELOAD"] = "введите /reload, чтобы перерисовать интерфейс на этом языке.",
+  ["SETTINGS_WINDOW_FAILED"] = "не удалось создать окно настроек.",
+  ["SETTINGS_WINDOW_NOT_MOVABLE"] = "не удалось переместить окно настроек.",
+  ["SETTINGS_HOST_REFUSED"] = "pandaUI отклонил страницу настроек; используется собственное окно PandaMap.",
+  ["SETTINGS_IN_UNREALUI"] = "настройки находятся в окне настроек pandaUI.",
+  ["MINIMAP_TOOLTIP"] = "Нажмите, чтобы открыть настройки карты.",
+  ["MAP_ZOOM_HINT"] = "Масштаб",
+
+  ["CHAT_LOADED"] = "v%s загружен. Настройки: /pmap.",
+  ["CHAT_FOG_REMOVED"] = "туман войны убран.",
+  ["CHAT_FOG_RESTORED"] = "туман войны восстановлен.",
+  ["CHAT_MINIMAP_SHOWN"] = "кнопка у миникарты показана.",
+  ["CHAT_MINIMAP_HIDDEN"] = "кнопка у миникарты скрыта.",
+  ["CHAT_HELP"] = "/pmap открывает настройки. /pmap fog [on|off], /pmap minimap.",
+  ["PACK_MISSING"] = "эта карта остаётся в стандартном качестве. Установите пакет данных %s в лаунчере, чтобы видеть её в HD.",
+  ["SETTINGS_HEADING_PACKS"] = "Наборы карт",
+  ["SETTINGS_PACKS_COUNT"] = "Доступно наборов карт: %s из %s",
+  ["SETTINGS_PACKS_NOTE"] = "Все наборы карт включены. Текстуры загружаются только для открытой карты.",
+  ["PACK_INSTALLED"] = "Доступен",
+  ["PACK_NOT_INSTALLED"] = "Не установлен",
+  ["PACK_WORLD_NAME"] = "Карты мира",
+  ["PACK_WORLD_NOTE"] = "Зоны, континенты, столицы и поля боя.",
+  ["PACK_UNEXPLORED_NAME"] = "Неисследованные карты",
+  ["PACK_UNEXPLORED_NOTE"] = "Неисследованные зоны в HD, пока туман войны сохранён.",
+  ["PACK_TERRAIN_NAME"] = "3D-рельеф",
+  ["PACK_TERRAIN_NOTE"] = "Вид сверху на рельеф всех открытых зон при приближении карты.",
+  ["SETTINGS_TERRAIN"] = "3D-рельеф при приближении",
+  ["SETTINGS_TERRAIN_NOTE"] = "Начиная с увеличения x%s, карта зоны показывает 3D-рельеф сверху вместо пергамента, "
+    .. "вся зона видна целиком.",
+
+  ["POPUP_QUESTION"] = "Вам нравится?",
+  ["POPUP_MESSAGE"] = "Поставьте лайк этому аддону в лаунчере",
+  ["POPUP_THANKS"] = "СПАСИБО ЗА ПОДДЕРЖКУ!",
+  ["POPUP_DONT_SHOW"] = "Больше не показывать",
+  ["POPUP_LIKED"] = "Лайк поставлен",
+  ["POPUP_PACK_REQUIRED"] = "Требуется пакет данных",
+  ["POPUP_PACK_MESSAGE"] = "Для Panda Map нужен как минимум пакет данных %s. Установите его из лаунчера и перезапустите игру.",
+  ["POPUP_PACK_OPTIONAL"] = "Пакеты %s и %s необязательны.",
+})

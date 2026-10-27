@@ -1,0 +1,5 @@
+# Local Python tooling artifacts; not part of the addon.
+__pycache__/
+
+# Local alignment audit output (large generated captures).
+.audit-*/

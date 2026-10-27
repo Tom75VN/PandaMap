@@ -1,0 +1,17 @@
+## Interface: 11200
+## Title: |cffffffffPanda |cfff5ae0aMap|r
+## Notes: Memory-conscious HD world and unexplored maps for the 1.12.1 client.
+## Author: Thomas
+## Version: 1.0.0
+## OptionalDeps: pandaUI
+## SavedVariables: PandaMapDB
+## X-Ported-From: UnrealMap 0.6.0
+
+Locale.lua
+Locales\enUS.lua
+Locales\ruRU.lua
+Locales\zhCN.lua
+MapOverlayData.lua
+pandaMap.lua
+Settings.lua
+MapZoom.lua

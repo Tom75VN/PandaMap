@@ -1,0 +1,52 @@
+-- PandaMap / Locales/enUS.lua -- English, the fallback for every key.
+PandaMapLocale.Register("enUS", {
+  ["COMMON_CLOSE"] = "Close",
+
+  ["SETTINGS_PAGE_GENERAL"] = "General",
+  ["SETTINGS_PAGE_PACKS"] = "Packs",
+  ["SETTINGS_HEADING_WORLD_MAP"] = "World map",
+  ["SETTINGS_REVEAL_FOG"] = "Remove fog of war",
+  ["SETTINGS_REVEAL_FOG_NOTE"] = "Shows the unexplored areas of every zone on the world map. "
+    .. "Exploration progress itself is unchanged. "
+    .. "When fog of war is kept, unexplored areas show the HD unexplored map.",
+  ["SETTINGS_MINIMAP_BUTTON"] = "Show minimap button",
+  ["SETTINGS_LANGUAGE_CHANGED"] = "language set to %s.",
+  ["SETTINGS_LANGUAGE_RELOAD"] = "type /reload to redraw the interface in it.",
+  ["SETTINGS_WINDOW_FAILED"] = "could not create the settings window.",
+  ["SETTINGS_WINDOW_NOT_MOVABLE"] = "the settings window could not be moved.",
+  ["SETTINGS_HOST_REFUSED"] = "pandaUI refused the settings page; using PandaMap's own window.",
+  ["SETTINGS_IN_UNREALUI"] = "the settings are in pandaUI's settings window.",
+  ["MINIMAP_TOOLTIP"] = "Click to open the map settings.",
+  ["MAP_ZOOM_HINT"] = "Zoom",
+
+  ["CHAT_LOADED"] = "v%s loaded. /pmap for settings.",
+  ["CHAT_FOG_REMOVED"] = "fog of war removed.",
+  ["CHAT_FOG_RESTORED"] = "fog of war restored.",
+  ["CHAT_MINIMAP_SHOWN"] = "minimap button shown.",
+  ["CHAT_MINIMAP_HIDDEN"] = "minimap button hidden.",
+  ["CHAT_HELP"] = "/pmap opens settings. /pmap fog [on|off], /pmap minimap.",
+  ["PACK_MISSING"] = "this map stays in standard definition. Install the %s data pack from the launcher to see it in HD.",
+  ["SETTINGS_HEADING_PACKS"] = "Map sets",
+  ["SETTINGS_PACKS_COUNT"] = "%s of %s map sets available",
+  ["SETTINGS_PACKS_NOTE"] = "All map sets are bundled. Textures load only for the map currently open.",
+  ["PACK_INSTALLED"] = "Available",
+  ["PACK_NOT_INSTALLED"] = "Not installed",
+  ["PACK_WORLD_NAME"] = "World Maps",
+  ["PACK_WORLD_NOTE"] = "Zones, continents, capitals and battlegrounds.",
+  ["PACK_UNEXPLORED_NAME"] = "Unexplored Maps",
+  ["PACK_UNEXPLORED_NOTE"] = "Unexplored zones in HD while fog of war is kept.",
+  ["PACK_TERRAIN_NAME"] = "3D Terrain",
+  ["PACK_TERRAIN_NOTE"] = "Top-down terrain of every outdoor zone, shown when the map is zoomed in.",
+  ["SETTINGS_TERRAIN"] = "3D terrain when zoomed in",
+  ["SETTINGS_TERRAIN_NOTE"] = "From zoom x%s on, a zone's map shows the top-down 3D terrain instead of the parchment, "
+    .. "with the whole zone visible.",
+
+  ["POPUP_QUESTION"] = "You like it ?",
+  ["POPUP_MESSAGE"] = "Give a like to this addon from the launcher",
+  ["POPUP_THANKS"] = "THANKS FOR YOUR SUPPORT !",
+  ["POPUP_DONT_SHOW"] = "Don't show again",
+  ["POPUP_LIKED"] = "I gave it a like",
+  ["POPUP_PACK_REQUIRED"] = "Data pack required",
+  ["POPUP_PACK_MESSAGE"] = "Panda Map needs at least the %s data pack. Install it from the launcher, then restart the game.",
+  ["POPUP_PACK_OPTIONAL"] = "The %s and %s packs are optional.",
+})

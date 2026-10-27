@@ -1,0 +1,1028 @@
+--[[
+PandaMap / Settings.lua
+
+The options pages, and which window draws them. Same contract as
+UnrealQuest's Core/Settings.lua, scaled down to two pages: General, and Packs
+(the launcher data packs and whether each one is installed).
+
+  * If pandaUI is installed, the pages are registered with its settings window
+    (U.RegisterSettingsTab) and use its shared checkbox component, so they look
+    and open like every other pandaUI page.
+  * Otherwise PandaMap builds its own small window and hands the same builder
+    its content frame, both sections stacked on one page, with a button beside
+    the minimap to open it.
+
+Neither addon depends on the other. pandaUI is detected by POLLING for the
+PandaUI global and type-checking RegisterSettingsTab, not by load order,
+IsAddOnLoaded or ADDON_LOADED, none of which has a probed record here. The host
+is decided once and never changes during the session.
+
+Nothing here touches map textures; the page only writes PandaMapDB and calls
+the PandaMap API.
+
+Language (Locale.lua) follows the same split: under pandaUI the page is drawn
+in pandaUI's language and has no selector; standalone, the window header
+carries an EN / CN / RU flag row. The same poll settles both decisions.
+Every label is translated when it is built; a language change asks for a
+/reload instead of rebuilding anything.
+]]
+
+local L = PandaMapLocale.L
+
+-- Under pandaUI the addon is a settings group (its own "Panda Map" category
+-- in pandaUI's Game Settings window) holding the General and Packs pages.
+local TAB_ID = "pandamap"
+local TAB_LABEL = "Panda Map"
+local GENERAL_PAGE_ID = TAB_ID .. ".general"
+local PACKS_PAGE_ID = TAB_ID .. ".packs"
+
+-- The display name and description of each launcher pack. A pack missing
+-- here is listed by its folder name alone.
+local PACK_INFO = {
+  PandaMap_World = { name = "PACK_WORLD_NAME", note = "PACK_WORLD_NOTE" },
+  PandaMap_Unexplored = { name = "PACK_UNEXPLORED_NAME", note = "PACK_UNEXPLORED_NOTE" },
+  PandaMap_Terrain = { name = "PACK_TERRAIN_NAME", note = "PACK_TERRAIN_NOTE" },
+}
+
+-- Packs page icons (manifest ui.packicons), bound only when the page is built.
+local UI_TEXTURES = "Interface\\AddOns\\PandaMap\\Media\\Textures\\UI\\"
+local PACK_ICON_INSTALLED = UI_TEXTURES .. "unrealmap-pack-installed"
+local PACK_ICON_MISSING = UI_TEXTURES .. "unrealmap-pack-missing"
+local PACK_ICON_NOTICE = UI_TEXTURES .. "unrealmap-pack-notice"
+
+-- Never the name of the global API table below: CreateFrame assigns the
+-- frame to a global of its name, which would replace that table.
+local WINDOW_NAME = "PandaMapSettingsWindow"
+local MINIMAP_BUTTON_NAME = "PandaMapMinimapButton"
+local MINIMAP_ICON = "Interface\\Icons\\INV_Misc_Map_01"
+local SETTINGS_TEXTURES = "Interface\\AddOns\\PandaMap\\Media\\Textures\\Settings\\"
+local LOGO_TEXTURE = SETTINGS_TEXTURES .. "PM_logo"
+local MASCOT_TEXTURE = SETTINGS_TEXTURES .. "panda-map"
+local MASCOT_SIZE = 185
+local MASCOT_ALPHA = 0.2
+local MASCOT_INSET = 8
+local PLAIN_TEXTURE = "Interface\\Buttons\\WHITE8X8"
+
+-- Standalone window metrics, the same header/footer/padding UnrealQuest uses.
+local HEADER_HEIGHT = 32
+local FOOTER_HEIGHT = 46
+local PADDING = 12
+-- Also the pageWidth given to pandaUI: a page that fits its settings box is
+-- drawn unscaled, at the game's settings text size.
+local CONTENT_WIDTH = 440
+local CONTENT_HEIGHT = 152
+local TEXT_WIDTH = CONTENT_WIDTH - 12
+local PACK_HEADER_GAP = 12
+local PACK_ROW_HEIGHT = 46
+local PACK_ICON_SIZE = 18
+local PACK_NOTICE_SIZE = 16
+local PACK_STATUS_WIDTH = 92
+local PACK_STATUS_LEFT = TEXT_WIDTH - PACK_STATUS_WIDTH - PACK_ICON_SIZE - 6
+local PACK_COUNT_WIDTH = 200
+local NOTE_INDENT = 20
+local CHECKBOX_SIZE = 14
+local CHECKBOX_INSET = 3
+local MINIMAP_BUTTON_SIZE = 24
+local TITLE_LOGO_SIZE = 20
+local TITLE_LOGO_GAP = 5
+
+-- Standalone language flags, pandaUI/UnrealQuest's header row: opacity alone
+-- marks the selection (full when active, dim when idle, near-full on hover).
+local FLAG_WIDTH = 18
+local FLAG_HEIGHT = 14
+local FLAG_GAP = 3
+local FLAG_RIGHT_INSET = 12
+local FLAG_SHADE_SELECTED = 1
+local FLAG_SHADE_IDLE = 0.3
+local FLAG_SHADE_HOVER = 0.95
+
+local HOST_POLL_INTERVAL = 0.5
+local HOST_POLL_SECONDS = 15
+
+local ACCENT = { 0.96, 0.68, 0.04, 1.00 }
+local ACCENT_HEX = "f5ae0a"
+local INSTALLED = { 0.36, 0.84, 0.28 }
+local INSTALLED_HEX = "5cd648"
+local RULE = { 0.24, 0.24, 0.24, 1.00 }
+local BACKGROUND = { 0.06, 0.06, 0.06 }
+local BORDER = { 0.16, 0.16, 0.16, 1.00 }
+local NOTE_GREY = 0.70
+
+local DEFAULTS = {
+  revealFog = false,
+  terrain3D = true,
+  minimapButton = true,
+}
+
+local host            -- nil while undecided, then "unrealui" or "standalone"
+local hostPageId      -- the page pandaUI opens: the group's page or the tab
+local Close, Toggle   -- defined with the window lifecycle below
+local hostWaited = 0
+local window, content
+local page            -- the standalone page: { widgets = {}, refresh = fn }
+local chrome = {}     -- standalone window parts shown/hidden explicitly
+local flagButtons = {} -- standalone language flags, created once with the window
+local minimapButton
+
+-- Saved settings ------------------------------------------------------------
+
+-- Read at call time, never cached at file scope: the saved table may be
+-- assigned after this file runs.
+local function Setting(key)
+  local db = _G["PandaMapDB"]
+  if type(db) == "table" and db[key] ~= nil then return db[key] end
+  return DEFAULTS[key]
+end
+
+local function Store(key, value)
+  if type(PandaMapDB) ~= "table" then PandaMapDB = {} end
+  PandaMapDB[key] = value
+end
+
+-- Every chat line: the white/accent wordmark, then grey text.
+local function Print(text)
+  local frame = _G["DEFAULT_CHAT_FRAME"]
+  if frame and type(frame.AddMessage) == "function" then
+    pcall(frame.AddMessage, frame,
+      "|cffffffffPanda |cff" .. ACCENT_HEX
+        .. "Map|r |cffb3b3b3: " .. text .. "|r")
+  end
+end
+
+-- The addon version, read at call time; pandaUI prints it after the category.
+local function Version()
+  return tostring(PandaMap and PandaMap.version or "?")
+end
+
+local function PageTitle()
+  local version = Version()
+  return "|cffffffffPanda |cff" .. ACCENT_HEX .. "Map|r |cff888888v"
+    .. tostring(version) .. "|r"
+end
+
+-- pandaUI's namespace, only if it carries the function this needs.
+local function PandaUI()
+  local found = _G["PandaUI"]
+  if type(found) ~= "table" or type(found.RegisterSettingsTab) ~= "function" then
+    return nil
+  end
+  return found
+end
+
+-- Small widget helpers ------------------------------------------------------
+
+local function Show(object, shown)
+  if not object then return end
+  if shown then
+    if type(object.Show) == "function" then pcall(object.Show, object) end
+  elseif type(object.Hide) == "function" then
+    pcall(object.Hide, object)
+  end
+end
+
+-- Shows one page region, including pandaUI composite controls, which carry
+-- their own parts. Parent visibility is not relied on to reach children.
+local function SetRegionShown(region, shown)
+  if not region then return end
+  if type(region.uuiSetShown) == "function" then
+    region.uuiSetShown(shown)
+    return
+  end
+  if region.uuiParts then
+    local i
+    for i = 1, table.getn(region.uuiParts) do
+      SetRegionShown(region.uuiParts[i], shown)
+    end
+    return
+  end
+  Show(region, shown)
+  Show(region.label, shown)
+end
+
+local function Solid(parent, layer, r, g, b, a)
+  local ok, texture = pcall(parent.CreateTexture, parent, nil, layer)
+  if not ok or not texture then return nil end
+  pcall(texture.SetTexture, texture, PLAIN_TEXTURE)
+  pcall(texture.SetVertexColor, texture, r, g, b, a or 1)
+  return texture
+end
+
+-- 1px edges drawn as textures; this client does not rasterize fractional
+-- backdrop edges.
+local function FlatBorder(frame)
+  local edges = {}
+  local spec = {
+    { "TOPLEFT", "TOPRIGHT", true }, { "BOTTOMLEFT", "BOTTOMRIGHT", true },
+    { "TOPLEFT", "BOTTOMLEFT", false }, { "TOPRIGHT", "BOTTOMRIGHT", false },
+  }
+  local i
+  for i = 1, 4 do
+    local edge = Solid(frame, "OVERLAY", BORDER[1], BORDER[2], BORDER[3], BORDER[4])
+    if edge then
+      pcall(edge.SetPoint, edge, spec[i][1], frame, spec[i][1], 0, 0)
+      pcall(edge.SetPoint, edge, spec[i][2], frame, spec[i][2], 0, 0)
+      if spec[i][3] then
+        pcall(edge.SetHeight, edge, 1)
+      else
+        pcall(edge.SetWidth, edge, 1)
+      end
+      edges[i] = edge
+    end
+  end
+  frame.PandaMapEdges = edges
+end
+
+local function SetBorderColor(frame, color)
+  local edges = frame and frame.PandaMapEdges
+  if not edges then return end
+  local i
+  for i = 1, 4 do
+    if edges[i] then
+      pcall(edges[i].SetVertexColor, edges[i], color[1], color[2], color[3], color[4])
+    end
+  end
+end
+
+local function HoverBorder(frame)
+  pcall(frame.SetScript, frame, "OnEnter", function() SetBorderColor(frame, ACCENT) end)
+  pcall(frame.SetScript, frame, "OnLeave", function() SetBorderColor(frame, BORDER) end)
+end
+
+local function FontString(parent, template, x, y, width, text, grey)
+  local ok, label = pcall(parent.CreateFontString, parent, nil, "OVERLAY", template)
+  if not ok or not label then return nil end
+  pcall(label.SetPoint, label, "TOPLEFT", parent, "TOPLEFT", x, y)
+  pcall(label.SetJustifyH, label, "LEFT")
+  if width then pcall(label.SetWidth, label, width) end
+  pcall(label.SetShadowOffset, label, 0, 0)
+  if grey then pcall(label.SetTextColor, label, grey, grey, grey) end
+  pcall(label.SetText, label, text or "")
+  return label
+end
+
+-- The standalone checkbox: a flat box with an accent mark, the same look as
+-- UnrealQuest's standalone settings toggle.
+local function CreateFlatCheckbox(parent, name, text, x, y, width, onChange)
+  local ok, box = pcall(CreateFrame, "Button", name, parent)
+  if not ok or not box then return nil end
+  pcall(box.SetWidth, box, CHECKBOX_SIZE)
+  pcall(box.SetHeight, box, CHECKBOX_SIZE)
+  pcall(box.SetPoint, box, "TOPLEFT", parent, "TOPLEFT", x, y)
+  pcall(box.EnableMouse, box, true)
+  pcall(box.RegisterForClicks, box, "LeftButtonUp")
+  local fill = Solid(box, "BACKGROUND", BACKGROUND[1], BACKGROUND[2], BACKGROUND[3], 1)
+  if fill then pcall(fill.SetAllPoints, fill, box) end
+  FlatBorder(box)
+  local mark = Solid(box, "OVERLAY", ACCENT[1], ACCENT[2], ACCENT[3], 1)
+  if mark then
+    pcall(mark.SetPoint, mark, "TOPLEFT", box, "TOPLEFT", CHECKBOX_INSET, -CHECKBOX_INSET)
+    pcall(mark.SetPoint, mark, "BOTTOMRIGHT", box, "BOTTOMRIGHT", -CHECKBOX_INSET, CHECKBOX_INSET)
+  end
+  local label = FontString(parent, "GameFontHighlightSmall", 0, 0, width, text)
+  if label then
+    pcall(label.ClearAllPoints, label)
+    pcall(label.SetPoint, label, "LEFT", box, "RIGHT", 6, 0)
+    pcall(label.SetTextColor, label, 1, 1, 1)
+  end
+  box.label = label
+
+  local control = { box = box, label = label, value = false }
+  control.SetValue = function(value)
+    control.value = value and true or false
+    Show(mark, control.value)
+  end
+  HoverBorder(box)
+  pcall(box.SetScript, box, "OnClick", function()
+    control.SetValue(not control.value)
+    onChange(control.value)
+  end)
+  return control
+end
+
+-- The page ------------------------------------------------------------------
+--
+-- pandaUI's contract (modules/settings.lua, RegisterSettingsTab):
+-- build(parent) returns the regions the page owns and a refresh function run
+-- on every open. The standalone window honours the same contract.
+--
+-- sections selects what the page holds: { general = true, packs = true }.
+-- The third return value is the page's bottom offset, used to size the
+-- standalone window.
+
+local function BuildPage(parent, standalone, sections)
+  local widgets, syncs = {}, {}
+  local y = standalone and -10 or 0
+
+  local function Add(region)
+    if region then table.insert(widgets, region) end
+    return region
+  end
+
+  -- One bound option. Uses pandaUI's shared checkbox when it hosts the page.
+  local function Checkbox(key, text, onChange)
+    local function Changed(checked)
+      if type(onChange) == "function" then
+        onChange(checked)
+      else
+        Store(key, checked and true or false)
+      end
+    end
+    local hostUI = not standalone and PandaUI() or nil
+    local control
+    if hostUI and type(hostUI.CreateCheckbox) == "function" then
+      local ok, created = pcall(hostUI.CreateCheckbox, parent, {
+        name = WINDOW_NAME .. key,
+        text = text,
+        textWidth = TEXT_WIDTH - NOTE_INDENT,
+        value = Setting(key) and true or false,
+        onChange = Changed,
+      })
+      if ok and created then
+        control = created
+        control.SetPoint("TOPLEFT", parent, "TOPLEFT", 0, y)
+        Add(control)
+      end
+    end
+    if not control then
+      control = CreateFlatCheckbox(parent, WINDOW_NAME .. key, text, 0, y,
+        TEXT_WIDTH - NOTE_INDENT, Changed)
+      if not control then return end
+      Add(control.box)
+    end
+    y = y - 18
+    table.insert(syncs, function() control.SetValue(Setting(key) and true or false) end)
+  end
+
+  -- A wrapped label's height, or fallback before the client can measure it.
+  local function Measured(label, fallback)
+    if label and type(label.GetHeight) == "function" then
+      local ok, measured = pcall(label.GetHeight, label)
+      if ok and type(measured) == "number" and measured > 0 then return measured end
+    end
+    return fallback
+  end
+
+  local function Note(text)
+    local label = Add(FontString(parent, "GameFontHighlightSmall", NOTE_INDENT, y,
+      TEXT_WIDTH - NOTE_INDENT, text, NOTE_GREY))
+    y = y - Measured(label, 26) - 12
+  end
+
+  local function Heading(text)
+    local heading = Add(FontString(parent, "GameFontNormal", 0, y, nil, text))
+    if heading then pcall(heading.SetTextColor, heading, ACCENT[1], ACCENT[2], ACCENT[3]) end
+    y = y - 22
+  end
+
+  -- A 1px separator across the text column at the current offset.
+  local function Rule()
+    local rule = Add(Solid(parent, "ARTWORK", RULE[1], RULE[2], RULE[3], RULE[4]))
+    if rule then
+      pcall(rule.SetPoint, rule, "TOPLEFT", parent, "TOPLEFT", 0, y)
+      pcall(rule.SetWidth, rule, TEXT_WIDTH)
+      pcall(rule.SetHeight, rule, 1)
+    end
+    y = y - 1
+  end
+
+  local function Icon(path, x, top, size)
+    local ok, icon = pcall(parent.CreateTexture, parent, nil, "ARTWORK")
+    if not ok or not icon then return nil end
+    pcall(icon.SetTexture, icon, path)
+    pcall(icon.SetWidth, icon, size)
+    pcall(icon.SetHeight, icon, size)
+    pcall(icon.SetPoint, icon, "TOPLEFT", parent, "TOPLEFT", x, top)
+    return Add(icon)
+  end
+
+  local function PackInstalled(pack)
+    return PandaMap and type(PandaMap.IsPackInstalled) == "function"
+      and PandaMap.IsPackInstalled(pack) and true or false
+  end
+
+  -- One launcher pack: its display name, a description below it, and its
+  -- install state on the right, read again on every open. A separator
+  -- closes the row.
+  local function PackRow(pack)
+    local info = PACK_INFO[pack]
+    local top = y
+    local textWidth = PACK_STATUS_LEFT - 8
+    Add(FontString(parent, "GameFontHighlight", 0, top - 8, textWidth,
+      info and L(info.name) or pack))
+    local height = PACK_ROW_HEIGHT
+    if info then
+      local note = Add(FontString(parent, "GameFontHighlightSmall", NOTE_INDENT, top - 26,
+        textWidth - NOTE_INDENT, L(info.note), NOTE_GREY))
+      local needed = 26 + Measured(note, 12) + 9
+      if needed > height then height = needed end
+    end
+    -- Whole pixels, so the icon is not resampled between screen pixels.
+    local middle = math.floor(top - height / 2)
+    local icon = Icon(PACK_ICON_MISSING, PACK_STATUS_LEFT, middle + PACK_ICON_SIZE / 2,
+      PACK_ICON_SIZE)
+    local status = Add(FontString(parent, "GameFontHighlightSmall", 0, 0, PACK_STATUS_WIDTH, ""))
+    if status then
+      pcall(status.ClearAllPoints, status)
+      pcall(status.SetPoint, status, "LEFT", parent, "TOPLEFT",
+        PACK_STATUS_LEFT + PACK_ICON_SIZE + 6, middle)
+    end
+    y = top - height
+    Rule()
+    table.insert(syncs, function()
+      local installed = PackInstalled(pack)
+      if icon then
+        pcall(icon.SetTexture, icon, installed and PACK_ICON_INSTALLED or PACK_ICON_MISSING)
+      end
+      if not status then return end
+      if installed then
+        pcall(status.SetText, status, L("PACK_INSTALLED"))
+        pcall(status.SetTextColor, status, INSTALLED[1], INSTALLED[2], INSTALLED[3])
+      else
+        pcall(status.SetText, status, L("PACK_NOT_INSTALLED"))
+        pcall(status.SetTextColor, status, NOTE_GREY, NOTE_GREY, NOTE_GREY)
+      end
+    end)
+  end
+
+  if sections.general then
+    Heading(L("SETTINGS_HEADING_WORLD_MAP"))
+
+    Checkbox("revealFog", L("SETTINGS_REVEAL_FOG"), function(checked)
+      if PandaMap and type(PandaMap.SetFogRevealEnabled) == "function" then
+        PandaMap.SetFogRevealEnabled(checked)
+      else
+        Store("revealFog", checked and true or false)
+      end
+    end)
+    Note(L("SETTINGS_REVEAL_FOG_NOTE"))
+
+    Checkbox("terrain3D", L("SETTINGS_TERRAIN"), function(checked)
+      if PandaMap and type(PandaMap.SetTerrainEnabled) == "function" then
+        PandaMap.SetTerrainEnabled(checked)
+      else
+        Store("terrain3D", checked and true or false)
+      end
+    end)
+    Note(L("SETTINGS_TERRAIN_NOTE", tostring(PandaMap
+      and type(PandaMap.GetTerrainZoom) == "function" and PandaMap.GetTerrainZoom()
+      or 2)))
+
+    if standalone then
+      Checkbox("minimapButton", L("SETTINGS_MINIMAP_BUTTON"), function(checked)
+        Store("minimapButton", checked and true or false)
+        Show(minimapButton, checked)
+      end)
+    end
+  end
+
+  if sections.packs then
+    -- Gap above the header: clear of the host's title rule on its own page,
+    -- or of the General options when stacked below them.
+    if sections.general then y = y - 14 else y = y - PACK_HEADER_GAP end
+    local packs = PandaMap and type(PandaMap.GetPacks) == "function"
+      and PandaMap.GetPacks() or {}
+    local total = table.getn(packs)
+
+    -- Header: the heading on the left, "N of M packs installed" on the right.
+    local count = Add(FontString(parent, "GameFontHighlightSmall",
+      TEXT_WIDTH - PACK_COUNT_WIDTH, y - 2, PACK_COUNT_WIDTH, "", NOTE_GREY))
+    if count then pcall(count.SetJustifyH, count, "RIGHT") end
+    Heading(L("SETTINGS_HEADING_PACKS"))
+    Rule()
+    table.insert(syncs, function()
+      if not count then return end
+      local installed, i = 0
+      for i = 1, total do
+        if PackInstalled(packs[i]) then installed = installed + 1 end
+      end
+      pcall(count.SetText, count, L("SETTINGS_PACKS_COUNT",
+        "|cff" .. INSTALLED_HEX .. installed .. "|r", total))
+    end)
+
+    local i
+    for i = 1, total do PackRow(packs[i]) end
+
+    -- Footer: a notice icon and the install hint, left-aligned.
+    y = y - 12
+    Icon(PACK_ICON_NOTICE, 0, y + 3, PACK_NOTICE_SIZE)
+    local hint = Add(FontString(parent, "GameFontHighlightSmall", PACK_NOTICE_SIZE + 6, y,
+      TEXT_WIDTH - PACK_NOTICE_SIZE - 6, L("SETTINGS_PACKS_NOTE"), NOTE_GREY))
+    y = y - Measured(hint, 12) - 12
+  end
+
+  local function Refresh()
+    local i
+    for i = 1, table.getn(syncs) do syncs[i]() end
+  end
+  return widgets, Refresh, y
+end
+
+-- Standalone window ---------------------------------------------------------
+
+local function ApplyStoredPosition()
+  local point, x, y = Setting("settingsPoint"), Setting("settingsX"), Setting("settingsY")
+  if type(point) ~= "string" or type(x) ~= "number" or type(y) ~= "number" then
+    point, x, y = "CENTER", 0, 0
+  end
+  pcall(window.ClearAllPoints, window)
+  pcall(window.SetPoint, window, point, UIParent, point, x, y)
+end
+
+local function CapturePosition()
+  local ok, point, _, _, x, y = pcall(window.GetPoint, window)
+  if ok and type(point) == "string" and type(x) == "number" and type(y) == "number" then
+    Store("settingsPoint", point)
+    Store("settingsX", x)
+    Store("settingsY", y)
+  end
+end
+
+-- Language selector -----------------------------------------------------------
+--
+-- Standalone window only: with pandaUI installed the language is set there,
+-- and a second selector would be two controls writing one value. A flag whose
+-- artwork will not load keeps its ASCII badge, so the way back to a readable
+-- language is always visible.
+
+local function ShadeFlag(button, shade, selected)
+  if button.PandaMapIcon then
+    pcall(button.PandaMapIcon.SetVertexColor, button.PandaMapIcon, 1, 1, 1, shade)
+  end
+  local badge = button.PandaMapBadge
+  if badge then
+    if selected then
+      pcall(badge.SetTextColor, badge, ACCENT[1], ACCENT[2], ACCENT[3])
+    else
+      pcall(badge.SetTextColor, badge, 0.6, 0.6, 0.6)
+    end
+  end
+end
+
+local function RefreshLanguageFlags()
+  local active = PandaMapLocale.GetLanguage()
+  local i
+  for i = 1, table.getn(flagButtons) do
+    local button = flagButtons[i]
+    button.PandaMapSelected = button.PandaMapLanguage == active
+    ShadeFlag(button, button.PandaMapSelected and FLAG_SHADE_SELECTED or FLAG_SHADE_IDLE,
+      button.PandaMapSelected)
+  end
+end
+
+local function BuildLanguageFlags(frame)
+  if PandaMapLocale.IsFollowingPandaUI() then return end
+  local languages = PandaMapLocale.GetLanguages()
+  local count = table.getn(languages)
+  local level = 0
+  local levelOk, frameLevel = pcall(frame.GetFrameLevel, frame)
+  if levelOk and type(frameLevel) == "number" then level = frameLevel end
+  local i
+  for i = 1, count do
+    local entry = languages[i]
+    local code, label = entry.code, entry.label
+    local ok, button = pcall(CreateFrame, "Button", WINDOW_NAME .. "Language" .. code, frame)
+    if ok and button then
+      pcall(button.SetWidth, button, FLAG_WIDTH)
+      pcall(button.SetHeight, button, FLAG_HEIGHT)
+      pcall(button.SetPoint, button, "TOPRIGHT", frame, "TOPRIGHT",
+        -FLAG_RIGHT_INSET - (count - i) * (FLAG_WIDTH + FLAG_GAP),
+        -(HEADER_HEIGHT - FLAG_HEIGHT) / 2)
+      pcall(button.SetFrameLevel, button, level + 20)
+      pcall(button.EnableMouse, button, true)
+      pcall(button.RegisterForClicks, button, "LeftButtonUp")
+
+      local badge = FontString(button, "GameFontHighlightSmall", 0, 0, nil, entry.short)
+      if badge then
+        pcall(badge.ClearAllPoints, badge)
+        pcall(badge.SetPoint, badge, "CENTER", button, "CENTER", 0, 0)
+        button.PandaMapBadge = badge
+      end
+
+      button.PandaMapLanguage = code
+      pcall(button.SetScript, button, "OnClick", function()
+        if not PandaMapLocale.SetLanguage(code) then return end
+        RefreshLanguageFlags()
+        -- Printed in the language just chosen: an unreadable line is the
+        -- fastest sign the client font lacks its glyphs.
+        Print(L("SETTINGS_LANGUAGE_CHANGED", label))
+        Print(L("SETTINGS_LANGUAGE_RELOAD"))
+      end)
+      pcall(button.SetScript, button, "OnEnter", function()
+        if not button.PandaMapSelected then ShadeFlag(button, FLAG_SHADE_HOVER, false) end
+      end)
+      pcall(button.SetScript, button, "OnLeave", function()
+        if not button.PandaMapSelected then ShadeFlag(button, FLAG_SHADE_IDLE, false) end
+      end)
+      table.insert(flagButtons, button)
+      table.insert(chrome, button)
+    end
+  end
+  RefreshLanguageFlags()
+end
+
+-- Outside BuildWindow: Lua 5.0 allows 32 upvalues per function.
+local function AddMascot(parent)
+  local ok, mascot = pcall(parent.CreateTexture, parent, nil, "BACKGROUND")
+  if not ok or not mascot or not pcall(mascot.SetTexture, mascot, MASCOT_TEXTURE) then return end
+  pcall(mascot.SetWidth, mascot, MASCOT_SIZE)
+  pcall(mascot.SetHeight, mascot, MASCOT_SIZE)
+  pcall(mascot.SetPoint, mascot, "BOTTOMRIGHT", parent, "BOTTOMRIGHT",
+    -MASCOT_INSET, MASCOT_INSET)
+  pcall(mascot.SetVertexColor, mascot, 1, 1, 1, MASCOT_ALPHA)
+end
+
+local function BuildWindow()
+  if window then return window end
+  local ok, frame = pcall(CreateFrame, "Frame", WINDOW_NAME, UIParent)
+  if not ok or not frame then
+    Print(L("SETTINGS_WINDOW_FAILED"))
+    return nil
+  end
+  window = frame
+  pcall(frame.SetFrameStrata, frame, "HIGH")
+  pcall(frame.EnableMouse, frame, true)
+  pcall(frame.SetWidth, frame, CONTENT_WIDTH + PADDING * 2)
+  pcall(frame.SetHeight, frame, CONTENT_HEIGHT + HEADER_HEIGHT + FOOTER_HEIGHT)
+
+  local background = Solid(frame, "BACKGROUND", BACKGROUND[1], BACKGROUND[2], BACKGROUND[3], 0.94)
+  if background then pcall(background.SetAllPoints, background, frame) end
+  FlatBorder(frame)
+  local accent = Solid(frame, "ARTWORK", ACCENT[1], ACCENT[2], ACCENT[3], 1)
+  if accent then
+    pcall(accent.SetPoint, accent, "TOPLEFT", frame, "TOPLEFT", 0, 0)
+    pcall(accent.SetWidth, accent, 2)
+    pcall(accent.SetHeight, accent, HEADER_HEIGHT)
+  end
+  local rules = { { "TOP", -HEADER_HEIGHT }, { "BOTTOM", FOOTER_HEIGHT } }
+  local i
+  for i = 1, 2 do
+    local rule = Solid(frame, "ARTWORK", BORDER[1], BORDER[2], BORDER[3], 1)
+    if rule then
+      pcall(rule.SetPoint, rule, rules[i][1] .. "LEFT", frame, rules[i][1] .. "LEFT", 0, rules[i][2])
+      pcall(rule.SetPoint, rule, rules[i][1] .. "RIGHT", frame, rules[i][1] .. "RIGHT", 0, rules[i][2])
+      pcall(rule.SetHeight, rule, 1)
+    end
+  end
+  local titleLeft = 2 + PADDING
+  local logoOk, logo = pcall(frame.CreateTexture, frame, nil, "OVERLAY")
+  if logoOk and logo and pcall(logo.SetTexture, logo, LOGO_TEXTURE) then
+    pcall(logo.SetWidth, logo, TITLE_LOGO_SIZE)
+    pcall(logo.SetHeight, logo, TITLE_LOGO_SIZE)
+    pcall(logo.SetPoint, logo, "LEFT", frame, "TOPLEFT", titleLeft,
+      -HEADER_HEIGHT / 2)
+    titleLeft = titleLeft + TITLE_LOGO_SIZE + TITLE_LOGO_GAP
+  elseif logoOk and logo then
+    pcall(logo.Hide, logo)
+  end
+  local title = FontString(frame, "GameFontNormal", 0, 0, nil, PageTitle())
+  if title then
+    pcall(title.ClearAllPoints, title)
+    pcall(title.SetPoint, title, "LEFT", frame, "TOPLEFT", titleLeft,
+      -HEADER_HEIGHT / 2)
+  end
+
+  -- Drag handle over the header: a Button child raised by frame level, never
+  -- by strata, moved with the warm-up StartMoving/StopMovingOrSizing pair
+  -- (frames.movable_drag_requires_button_handle).
+  -- The handle stops short of the flag row so the flags stay clickable; when
+  -- pandaUI owns the language there is no row and it spans the header.
+  local handleInset = 0
+  if not PandaMapLocale.IsFollowingPandaUI() then
+    handleInset = FLAG_RIGHT_INSET
+      + table.getn(PandaMapLocale.GetLanguages()) * (FLAG_WIDTH + FLAG_GAP)
+  end
+  local handleOk, handle = pcall(CreateFrame, "Button", WINDOW_NAME .. "Handle", frame)
+  if handleOk and handle then
+    pcall(handle.SetPoint, handle, "TOPLEFT", frame, "TOPLEFT", 0, 0)
+    pcall(handle.SetPoint, handle, "TOPRIGHT", frame, "TOPRIGHT", -handleInset, 0)
+    pcall(handle.SetHeight, handle, HEADER_HEIGHT)
+    local levelOk, level = pcall(frame.GetFrameLevel, frame)
+    if levelOk and type(level) == "number" then
+      pcall(handle.SetFrameLevel, handle, level + 10)
+    end
+    pcall(handle.EnableMouse, handle, true)
+    pcall(handle.RegisterForClicks, handle, "LeftButtonUp")
+    pcall(handle.RegisterForDrag, handle, "LeftButton")
+    pcall(handle.SetScript, handle, "OnDragStart", function()
+      pcall(frame.SetMovable, frame, true)
+      pcall(frame.StartMoving, frame)
+      pcall(frame.StopMovingOrSizing, frame)
+      if not pcall(frame.StartMoving, frame) then
+        Print(L("SETTINGS_WINDOW_NOT_MOVABLE"))
+      end
+    end)
+    pcall(handle.SetScript, handle, "OnDragStop", function()
+      pcall(frame.StopMovingOrSizing, frame)
+      CapturePosition()
+    end)
+    table.insert(chrome, handle)
+  end
+  BuildLanguageFlags(frame)
+
+  local closeOk, close = pcall(CreateFrame, "Button", WINDOW_NAME .. "Close", frame)
+  if closeOk and close then
+    pcall(close.SetWidth, close, 80)
+    pcall(close.SetHeight, close, 22)
+    pcall(close.SetPoint, close, "BOTTOMRIGHT", frame, "BOTTOMRIGHT", -PADDING, PADDING)
+    pcall(close.EnableMouse, close, true)
+    pcall(close.RegisterForClicks, close, "LeftButtonUp")
+    local fill = Solid(close, "BACKGROUND", BACKGROUND[1], BACKGROUND[2], BACKGROUND[3], 1)
+    if fill then pcall(fill.SetAllPoints, fill, close) end
+    FlatBorder(close)
+    local label = FontString(close, "GameFontHighlightSmall", 0, 0, nil, L("COMMON_CLOSE"))
+    if label then
+      pcall(label.ClearAllPoints, label)
+      pcall(label.SetPoint, label, "CENTER", close, "CENTER", 0, 0)
+    end
+    HoverBorder(close)
+    pcall(close.SetScript, close, "OnClick", function() Close() end)
+    table.insert(chrome, close)
+  end
+
+  local contentOk, frameContent = pcall(CreateFrame, "Frame", WINDOW_NAME .. "Content", frame)
+  if contentOk and frameContent then
+    content = frameContent
+    pcall(content.SetPoint, content, "TOPLEFT", frame, "TOPLEFT", PADDING, -HEADER_HEIGHT)
+    pcall(content.SetPoint, content, "BOTTOMRIGHT", frame, "BOTTOMRIGHT", -PADDING, FOOTER_HEIGHT)
+    pcall(content.EnableMouse, content, false)
+  end
+
+  ApplyStoredPosition()
+  pcall(frame.Hide, frame)
+  return frame
+end
+
+local function SetPageShown(shown)
+  local i
+  if page then
+    for i = 1, table.getn(page.widgets) do SetRegionShown(page.widgets[i], shown) end
+  end
+  for i = 1, table.getn(chrome) do Show(chrome[i], shown) end
+end
+
+-- Minimap button ------------------------------------------------------------
+--
+-- Standalone only; pandaUI already has a settings button that opens the
+-- window holding this page. Placed beside the minimap's left edge, one slot
+-- below the settings-button position UnrealQuest and pandaUI use.
+
+local function EnsureMinimapButton()
+  if minimapButton then return minimapButton end
+  local ok, button = pcall(CreateFrame, "Button", MINIMAP_BUTTON_NAME, UIParent)
+  if not ok or not button then return nil end
+  minimapButton = button
+  pcall(button.SetWidth, button, MINIMAP_BUTTON_SIZE)
+  pcall(button.SetHeight, button, MINIMAP_BUTTON_SIZE)
+  pcall(button.SetFrameStrata, button, "MEDIUM")
+  pcall(button.EnableMouse, button, true)
+  pcall(button.RegisterForClicks, button, "LeftButtonUp")
+  local fill = Solid(button, "BACKGROUND", BACKGROUND[1], BACKGROUND[2], BACKGROUND[3], 0.85)
+  if fill then pcall(fill.SetAllPoints, fill, button) end
+  FlatBorder(button)
+
+  local iconOk, icon = pcall(button.CreateTexture, button, nil, "ARTWORK")
+  if iconOk and icon and pcall(icon.SetTexture, icon, MINIMAP_ICON) then
+    pcall(icon.SetPoint, icon, "TOPLEFT", button, "TOPLEFT", 1, -1)
+    pcall(icon.SetPoint, icon, "BOTTOMRIGHT", button, "BOTTOMRIGHT", -1, 1)
+    pcall(icon.SetTexCoord, icon, 0.08, 0.92, 0.08, 0.92)
+  else
+    local label = FontString(button, "GameFontNormal", 0, 0, nil, "M")
+    if label then
+      pcall(label.ClearAllPoints, label)
+      pcall(label.SetPoint, label, "CENTER", button, "CENTER", 0, -1)
+      pcall(label.SetTextColor, label, ACCENT[1], ACCENT[2], ACCENT[3])
+    end
+  end
+
+  local below = -(MINIMAP_BUTTON_SIZE + 4)
+  local minimap = _G["Minimap"]
+  local cluster = _G["MinimapCluster"]
+  if not (minimap and pcall(button.SetPoint, button, "TOPRIGHT", minimap, "TOPLEFT", -6, below))
+      and not (cluster and pcall(button.SetPoint, button, "TOPRIGHT", cluster, "TOPLEFT", -6, below - 6)) then
+    pcall(button.SetPoint, button, "TOPRIGHT", UIParent, "TOPRIGHT", -8, -8 + below)
+  end
+
+  pcall(button.SetScript, button, "OnClick", function() Toggle() end)
+  pcall(button.SetScript, button, "OnEnter", function()
+    SetBorderColor(button, ACCENT)
+    local tooltip = _G["GameTooltip"]
+    if tooltip then
+      pcall(tooltip.SetOwner, tooltip, button, "ANCHOR_LEFT")
+      pcall(tooltip.SetText, tooltip, TAB_LABEL, ACCENT[1], ACCENT[2], ACCENT[3])
+      pcall(tooltip.AddLine, tooltip, L("MINIMAP_TOOLTIP"), 0.7, 0.7, 0.7)
+      pcall(tooltip.Show, tooltip)
+    end
+  end)
+  pcall(button.SetScript, button, "OnLeave", function()
+    SetBorderColor(button, BORDER)
+    local tooltip = _G["GameTooltip"]
+    if tooltip then pcall(tooltip.Hide, tooltip) end
+  end)
+
+  Show(button, Setting("minimapButton") ~= false)
+  return button
+end
+
+-- Host resolution -----------------------------------------------------------
+
+-- A group with General and Packs pages where pandaUI supports groups;
+-- pandaUI lists a group registered as "pandamap" as its own category. An
+-- older pandaUI without groups gets a single row holding both sections.
+local function RegisterWithPandaUI(hostUI)
+  local function Build(parent) return BuildPage(parent, false, { general = true }) end
+  local function BuildPacks(parent) return BuildPage(parent, false, { packs = true }) end
+  local function BuildAll(parent)
+    return BuildPage(parent, false, { general = true, packs = true })
+  end
+  if type(hostUI.RegisterSettingsGroup) == "function" then
+    local ok, group = pcall(hostUI.RegisterSettingsGroup, TAB_ID, TAB_LABEL,
+      { after = "profiles", defaultPage = GENERAL_PAGE_ID, icon = LOGO_TEXTURE,
+        watermark = MASCOT_TEXTURE, pageWidth = CONTENT_WIDTH, version = Version,
+        title = PageTitle })
+    if not ok or not group then return false end
+    local pageOk, entry = pcall(hostUI.RegisterSettingsTab, GENERAL_PAGE_ID,
+      L("SETTINGS_PAGE_GENERAL"), Build, { parent = TAB_ID, after = TAB_ID })
+    if not pageOk or not entry then return false end
+    -- Informational page; General stays registered if pandaUI refuses it.
+    pcall(hostUI.RegisterSettingsTab, PACKS_PAGE_ID, L("SETTINGS_PAGE_PACKS"),
+      BuildPacks, { parent = TAB_ID, after = GENERAL_PAGE_ID })
+    hostPageId = GENERAL_PAGE_ID
+    return true
+  end
+  local ok, entry = pcall(hostUI.RegisterSettingsTab, TAB_ID, TAB_LABEL, BuildAll,
+    { after = "profiles", icon = LOGO_TEXTURE, watermark = MASCOT_TEXTURE,
+      pageWidth = CONTENT_WIDTH, version = Version,
+      title = PageTitle })
+  if not ok or not entry then return false end
+  hostPageId = TAB_ID
+  return true
+end
+
+local function ResolveHost(force)
+  if host then return host end
+  local hostUI = PandaUI()
+  if hostUI then
+    if RegisterWithPandaUI(hostUI) then
+      host = "unrealui"
+      Show(minimapButton, false)
+    else
+      host = "standalone"
+      Print(L("SETTINGS_HOST_REFUSED"))
+      EnsureMinimapButton()
+    end
+  elseif force then
+    host = "standalone"
+    EnsureMinimapButton()
+  end
+  return host
+end
+
+-- One poll frame, stopped as soon as the host and the language are decided
+-- (both within the same grace period). It creates nothing map-related; the first standalone tick shows the minimap button straight
+-- away instead of after the full grace period.
+local function Now()
+  if type(GetTime) ~= "function" then return 0 end
+  local ok, value = pcall(GetTime)
+  return ok and type(value) == "number" and value or 0
+end
+
+local poll = CreateFrame("Frame", "PandaMapSettingsPoll", UIParent)
+local pollStarted, pollLast
+-- SetScript(type, nil) does not detach a script on this client (UnrealQuest's
+-- bootstrap), so the handler also gates itself once both are decided.
+local pollDone
+poll:SetScript("OnUpdate", function()
+  if pollDone then return end
+  local now = Now()
+  if not pollStarted then
+    pollStarted = now
+    Print(L("CHAT_LOADED", tostring(PandaMap and PandaMap.version or "?")))
+  elseif now - pollLast < HOST_POLL_INTERVAL then
+    return
+  end
+  pollLast = now
+  hostWaited = now - pollStarted
+  local expired = hostWaited >= HOST_POLL_SECONDS
+  if not ResolveHost(expired) and not minimapButton then
+    EnsureMinimapButton()
+  end
+  if host and PandaMapLocale.Resolve(expired) then
+    pollDone = true
+    poll:SetScript("OnUpdate", nil)
+    poll:Hide()
+  end
+end)
+
+-- Opening and closing -------------------------------------------------------
+
+local function Open()
+  local resolved = ResolveHost(true)
+  -- Final before any label or the flag row is built.
+  PandaMapLocale.Resolve(true)
+  if resolved == "unrealui" then
+    local hostUI = PandaUI()
+    if hostUI and type(hostUI.OpenSettingsPage) == "function" then
+      local ok, opened = pcall(hostUI.OpenSettingsPage, hostPageId)
+      if ok and opened then return true end
+    end
+    if hostUI and type(hostUI.OpenSettings) == "function"
+        and pcall(hostUI.OpenSettings, true) then
+      return true
+    end
+    Print(L("SETTINGS_IN_UNREALUI"))
+    return false
+  end
+
+  if not BuildWindow() or not content then return false end
+  if not page then
+    local widgets, refresh, bottom = BuildPage(content, true, { general = true, packs = true })
+    page = { widgets = widgets or {}, refresh = refresh }
+    AddMascot(content)
+    -- Grows the window to fit both stacked sections, never below its base size.
+    local height = CONTENT_HEIGHT
+    if type(bottom) == "number" and PADDING - bottom > height then height = PADDING - bottom end
+    pcall(window.SetHeight, window, height + HEADER_HEIGHT + FOOTER_HEIGHT)
+  end
+  SetPageShown(true)
+  if type(page.refresh) == "function" then page.refresh() end
+  Show(window, true)
+  return true
+end
+
+local function IsWindowShown()
+  if not window or type(window.IsShown) ~= "function" then return false end
+  local ok, shown = pcall(window.IsShown, window)
+  return ok and shown and true or false
+end
+
+Close = function()
+  if host == "unrealui" or not window then return false end
+  SetPageShown(false)
+  Show(window, false)
+  return true
+end
+
+Toggle = function()
+  if host ~= "unrealui" and IsWindowShown() then return Close() end
+  return Open()
+end
+
+PandaMapSettings = {
+  Open = Open,
+  Close = Close,
+  Toggle = Toggle,
+  GetHost = function() return host end,
+}
+
+-- Slash command -------------------------------------------------------------
+
+SLASH_PANDAMAP1 = "/pmap"
+SLASH_PANDAMAP2 = "/pandamap"
+SlashCmdList["PANDAMAP"] = function(message)
+  local _, _, command, value = string.find(string.lower(message or ""), "^%s*(%S*)%s*(%S*)")
+  if command == "fog" then
+    local enabled
+    if value == "on" then
+      enabled = true
+    elseif value == "off" then
+      enabled = false
+    else
+      enabled = Setting("revealFog") ~= true
+    end
+    if PandaMap and type(PandaMap.SetFogRevealEnabled) == "function" then
+      PandaMap.SetFogRevealEnabled(enabled)
+    else
+      Store("revealFog", enabled)
+    end
+    if page and type(page.refresh) == "function" then page.refresh() end
+    Print(L(enabled and "CHAT_FOG_REMOVED" or "CHAT_FOG_RESTORED"))
+  elseif command == "terrain" then
+    -- "/pmap terrain on|off" sets the option; plain "/pmap terrain" prints
+    -- the diagnostic state (zoom read, map, bound tile).
+    if (value == "on" or value == "off") and PandaMap
+        and type(PandaMap.SetTerrainEnabled) == "function" then
+      PandaMap.SetTerrainEnabled(value == "on")
+      if page and type(page.refresh) == "function" then page.refresh() end
+    end
+    if PandaMap and type(PandaMap.GetTerrainStatus) == "function" then
+      local ok, status = pcall(PandaMap.GetTerrainStatus)
+      Print("terrain: " .. tostring(status))
+    end
+  elseif command == "perf" then
+    -- Starts a SavedVariables-backed capture that survives the test /reload.
+    local zoom = _G["PandaMapZoom"]
+    if type(zoom) == "table" and type(zoom.StartPerf) == "function" then
+      local ok, text = pcall(zoom.StartPerf)
+      Print("perf: " .. tostring(text))
+    end
+  elseif command == "minimap" then
+    local shown = Setting("minimapButton") == false
+    Store("minimapButton", shown)
+    Show(minimapButton, shown)
+    Print(L(shown and "CHAT_MINIMAP_SHOWN" or "CHAT_MINIMAP_HIDDEN"))
+  elseif command == "" or command == "config" or command == "settings" then
+    Open()
+  else
+    Print(L("CHAT_HELP"))
+  end
+end
