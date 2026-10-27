@@ -1,5 +1,35 @@
-# Local Python tooling artifacts; not part of the addon.
-__pycache__/
+# Local AI and project notes; not part of the addon.
+AGENTS.md
+CLAUDE.md
+.claude/
+
+# Design notes stay local.
+docs/
+
+# Dev tooling: map builders, audits and their data.
+# release.py stays: the GitHub release workflow runs it.
+tools/*
+!tools/release.py
+/*.py
+/*.csv
 
 # Local alignment audit output (large generated captures).
 .audit-*/
+
+# Release packages built locally.
+/PandaMap*.zip
+/dist/
+/package/
+
+# Local Python tooling artifacts.
+__pycache__/
+*.pyc
+*.whl
+
+# Stray files from tools and the OS.
+--help
+*.bak
+*.tmp
+*.log
+Thumbs.db
+desktop.ini

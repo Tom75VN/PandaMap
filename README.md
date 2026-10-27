@@ -126,6 +126,6 @@ Current release: 1.0.0
 
 ## Acknowledgements
 
-PandaMap is a port of [UnrealMap](https://github.com/Tom75VN/UnrealMap) 0.6.0 to the OctoWoW client. Technical notes live in [docs/TECHNICAL.md](docs/TECHNICAL.md).
+PandaMap is a port of [UnrealMap](https://github.com/Tom75VN/UnrealMap) 0.6.0 to the OctoWoW client.
 
 World of Warcraft is a trademark of Blizzard Entertainment. This project is not affiliated with or endorsed by Blizzard Entertainment.
