@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CHANGELOG = ROOT / "CHANGELOG.md"
 TOC = ROOT / "pandaMap.toc"
 LUA = ROOT / "pandaMap.lua"
+README = ROOT / "README.md"
 UNRELEASED = "Unreleased"
 CATEGORIES = ("Added", "Changed", "Fixed", "Removed", "Security")
 MAX_ITEM_LENGTH = 160
@@ -138,6 +139,7 @@ def project_versions():
     return {
         "pandaMap.toc": _match(TOC, r"^## Version: (\d+\.\d+\.\d+)\r?$", "version"),
         "pandaMap.lua": _match(LUA, r'^  version = "(\d+\.\d+\.\d+)",\r?$', "version"),
+        "README.md": _match(README, r"^Current release: (\d+\.\d+\.\d+)\r?$", "version"),
     }
 
 
@@ -204,6 +206,8 @@ def prepare(part):
     _replace_once(TOC, r"^## Version: \S+(?=\r?$)", "## Version: " + new_version)
     _replace_once(LUA, r'^  version = "[^"]+",(?=\r?$)',
                   '  version = "%s",' % new_version)
+    _replace_once(README, r"^Current release: \S+(?=\r?$)",
+                  "Current release: " + new_version)
     print("%s -> %s. Review and commit, then create and push tag v%s."
           % (version, new_version, new_version))
 

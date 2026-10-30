@@ -2,12 +2,7 @@ local TILE_COUNT = 12
 local MAX_OVERLAY_TILES = 64
 local DRIVER_INTERVAL = 0.2
 local TERRAIN_FADE_DURATION = 0.3
-local ADDON_ROOT = "Interface\\AddOns\\"
-local ADDON_ASSET_ROOT = ADDON_ROOT .. "pandaMap\\Packs\\"
 
--- All map files are bundled below PandaMap, but the runtime binds only the
--- twelve base slots and native overlay slots belonging to the visible map.
-local PACK_PREFIX = ADDON_ASSET_ROOT
 local UNEXPLORED_CATEGORY = "World_Unexplored"
 local TERRAIN_CATEGORY = "World_Terrain"
 local CATEGORY_PACKS = {
@@ -20,6 +15,29 @@ local CATEGORY_PACKS = {
 }
 -- Every data pack, in the order the settings page lists them.
 local PACKS = { "PandaMap_World", "PandaMap_Unexplored", "PandaMap_Terrain" }
+local KNOWN_PACKS = {
+  PandaMap_World = true,
+  PandaMap_Unexplored = true,
+  PandaMap_Terrain = true,
+}
+local packRoots = {}
+
+-- Packs are separate addons. Each one registers its own texture root after
+-- PandaMap loads; the repository's development shim registers the legacy
+-- nested roots so a checkout in Interface/AddOns/pandaMap still runs in game.
+local function RegisterPack(pack, root)
+  if not KNOWN_PACKS[pack] or type(root) ~= "string" or root == "" then
+    return false
+  end
+  root = string.gsub(root, "/", "\\")
+  if string.sub(root, -1) ~= "\\" then root = root .. "\\" end
+  packRoots[pack] = root
+  return true
+end
+
+local function IsPackInstalled(pack)
+  return packRoots[pack] ~= nil
+end
 
 -- 3D terrain (build_terrain_tiles.py): from this zoom on, a zone's base tiles
 -- show the top-down terrain render instead of the parchment map. The tiles
@@ -48,7 +66,8 @@ local OVERLAY_TRANSFORMS = {
 }
 
 local function CategoryRoot(category)
-  return ADDON_ASSET_ROOT .. CATEGORY_PACKS[category] .. "\\" .. category .. "\\"
+  local root = packRoots[CATEGORY_PACKS[category]]
+  return root and root .. category .. "\\" or nil
 end
 
 local MAP_CATEGORIES = {
@@ -151,17 +170,13 @@ local function AssetRoot(mapName)
   local assetMapName = AssetMapName(mapName)
   local category = MAP_CATEGORIES[assetMapName]
   if not category then return nil end
-  return CategoryRoot(category) .. assetMapName
-end
-
-local function IsPackInstalled(pack)
-  return pack == "PandaMap_World" or pack == "PandaMap_Unexplored"
-    or pack == "PandaMap_Terrain"
+  local root = CategoryRoot(category)
+  return root and root .. assetMapName or nil
 end
 
 local function MapPacksInstalled(mapName)
   local category = MAP_CATEGORIES[AssetMapName(mapName)]
-  return category ~= nil
+  return category ~= nil and IsPackInstalled(CATEGORY_PACKS[category])
 end
 
 -- A zone with a themed unexplored master keeps its standard base in
@@ -171,13 +186,20 @@ local function UsesUnexploredBase(assetMapName)
   return UNEXPLORED_BASE_MAPS[assetMapName] == true
 end
 
+local function UsesUnexploredPack(assetMapName)
+  return UsesUnexploredBase(assetMapName)
+    and IsPackInstalled("PandaMap_Unexplored")
+end
+
 local function AssetTileRoot(mapName, terrain)
   local assetMapName = AssetMapName(mapName)
   if terrain then
-    return CategoryRoot(TERRAIN_CATEGORY) .. assetMapName
+    local root = CategoryRoot(TERRAIN_CATEGORY)
+    return root and root .. assetMapName or nil
   end
-  if UsesUnexploredBase(assetMapName) then
-    return CategoryRoot(UNEXPLORED_CATEGORY) .. assetMapName
+  if UsesUnexploredPack(assetMapName) then
+    local root = CategoryRoot(UNEXPLORED_CATEGORY)
+    return root and root .. assetMapName or nil
   end
   return AssetRoot(assetMapName)
 end
@@ -185,7 +207,7 @@ end
 local function AssetTileStem(mapName, terrain)
   local assetMapName = AssetMapName(mapName)
   if terrain then return assetMapName .. "_Terrain" end
-  if UsesUnexploredBase(assetMapName) then
+  if UsesUnexploredPack(assetMapName) then
     return assetMapName .. "_Unexplored"
   end
   return assetMapName
@@ -225,6 +247,7 @@ end
 local function WantsTerrain(assetMapName)
   return assetMapName ~= nil and TERRAIN_BASE_MAPS[assetMapName] == true
     and not TERRAIN_BASE_EXCLUSIONS[assetMapName]
+    and IsPackInstalled("PandaMap_Terrain")
     and IsTerrainEnabled() and CurrentZoom() >= TERRAIN_ZOOM
 end
 
@@ -332,13 +355,15 @@ local function NormalizePath(path)
   return string.lower(string.gsub(path, "\\", "/"))
 end
 
-local NORMALIZED_PACK_PREFIX = NormalizePath(PACK_PREFIX)
-local NORMALIZED_PACK_PREFIX_LENGTH = string.len(NORMALIZED_PACK_PREFIX)
-
 local function HasPackPrefix(path)
   path = NormalizePath(path)
-  return path and string.sub(path, 1, NORMALIZED_PACK_PREFIX_LENGTH)
-    == NORMALIZED_PACK_PREFIX
+  if not path then return false end
+  local _, root
+  for _, root in pairs(packRoots) do
+    root = NormalizePath(root)
+    if root and string.sub(path, 1, string.len(root)) == root then return true end
+  end
+  return false
 end
 
 local function TextureBasename(path)
@@ -486,8 +511,9 @@ local function TilePaths(mapName, terrain)
   if activeTileMap == mapName and activeTileTerrain == terrain then
     return activeTilePaths
   end
-  local root = AssetTileRoot(mapName, terrain) .. "\\"
-    .. AssetTileStem(mapName, terrain)
+  local assetRoot = AssetTileRoot(mapName, terrain)
+  if not assetRoot then return nil end
+  local root = assetRoot .. "\\" .. AssetTileStem(mapName, terrain)
   local i
   for i = 1, TILE_COUNT do activeTilePaths[i] = root .. i end
   activeTileMap, activeTileTerrain = mapName, terrain
@@ -749,6 +775,7 @@ local function CityTilesReady(mapName)
   local tiles = ResolveTiles()
   if not tiles then return false end
   local paths = TilePaths(assetMapName)
+  if not paths then return false end
   local i
   for i = 1, TILE_COUNT do
     if not SamePath(SafeTexture(tiles[i]), paths[i]) then
@@ -802,7 +829,9 @@ local function ApplyOverlays(mapName, transform)
   if not overlayReplacementEnabled then return 0 end
   local assetMapName = AssetMapName(mapName)
   local names = OverlayNames(assetMapName)
-  local root = AssetRoot(assetMapName) .. "\\"
+  local assetRoot = AssetRoot(assetMapName)
+  if not assetRoot then return 0 end
+  local root = assetRoot .. "\\"
   local bound = 0
   local i
   for i = 1, MAX_OVERLAY_TILES do
@@ -857,6 +886,10 @@ local function ApplyReplacement(force)
   local transform = not terrain and TILE_TRANSFORMS[AssetTileStem(assetMapName)]
     or nil
   local paths = TilePaths(assetMapName, terrain)
+  if not paths then
+    ClearBindings()
+    return false
+  end
   local i
   for i = 1, TILE_COUNT do
     local current = SafeTexture(tiles[i])
@@ -1210,13 +1243,14 @@ if type(nativeToggle) == "function" then
 end
 
 PandaMap = {
-  version = "1.0.0",
+  version = "1.0.1",
   ApplyReplacement = ApplyReplacement,
   ClearBindings = ClearBindings,
   GetFogRevealEnabled = IsFogRevealEnabled,
   GetPacks = function()
     return PACKS
   end,
+  RegisterPack = RegisterPack,
   IsPackInstalled = IsPackInstalled,
   GetOverlayReplacementEnabled = function()
     return overlayReplacementEnabled

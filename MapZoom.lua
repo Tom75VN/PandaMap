@@ -921,7 +921,10 @@ end
 
 -- pandaUI's playerarrow module parks the native arrow off the map and draws
 -- its own on WorldMapDetailFrame, which moves with the zoom by itself.
+-- PlayerArrow.lua does the same when pandaUI's arrow is not running.
 local function NativeArrowParked()
+  local own = _G["PandaMapPlayerArrow"]
+  if type(own) == "table" and own.IsParked() then return true end
   local hostUI = _G["PandaUI"]
   if type(hostUI) ~= "table" or type(hostUI.GetModule) ~= "function" then
     return false
@@ -1103,10 +1106,16 @@ local function Install()
   WrapNativeArrow()
   WrapWindowToggle("WorldMapFrame_Minimize")
   WrapWindowToggle("WorldMapFrame_Maximize")
+  -- The stock OnShow pings the player (WorldMapFrame_PingPlayerPosition); with
+  -- the zoom layout that ping draws away from the player cursor, so it is
+  -- hidden before the first draw, as pandaUI does (knowledge.json /
+  -- map.worldmap_open_ping_detached_from_player_arrow).
   PostHookScript(map, "OnShow", function()
     pcall(viewport.Show, viewport)
     Layout()
     Reset()
+    local ping = _G["WorldMapPing"]
+    if ping and ping.Hide then pcall(ping.Hide, ping) end
   end)
   PostHookScript(map, "OnHide", function()
     state.dragging = false

@@ -9,10 +9,20 @@
 > [!IMPORTANT]
 > ## Install
 >
-> 1. [Download the latest release](https://github.com/Tom75VN/PandaMap/releases/latest/download/PandaMap.zip).
-> 2. Extract it into `Wow-Octo\Interface\AddOns\`.
-> 3. Check that `pandaMap.toc` sits directly inside the `pandaMap` folder.
-> 4. Launch the game, or reload the interface.
+> 1. Download the [PandaMap core](https://github.com/Tom75VN/PandaMap/releases/latest/download/PandaMap.zip).
+> 2. Download the [World Maps](https://github.com/Tom75VN/PandaMap/releases/download/world-v1.0.0/PandaMap-World.zip) pack. It contains the main HD maps.
+> 3. Download the optional [Unexplored Maps](https://github.com/Tom75VN/PandaMap/releases/download/unexplored-v1.0.0/PandaMap-Unexplored.zip) and [3D Terrain](https://github.com/Tom75VN/PandaMap/releases/download/terrain-v1.0.0/PandaMap-Terrain.zip) packs for those features.
+> 4. Extract every ZIP into `Wow-Octo\Interface\AddOns\`.
+> 5. Check that `pandaMap`, `PandaMap_World`, `PandaMap_Unexplored` and `PandaMap_Terrain` are separate folders directly inside `AddOns`.
+> 6. Launch the game, or reload the interface.
+
+## Updating
+
+For normal addon updates, download only the latest **PandaMap core**. Your separately installed map folders stay untouched, so hundreds of megabytes of unchanged artwork are not downloaded again.
+
+A map pack needs replacing only when its own version changes. Each pack has an independent release and version.
+
+Upgrading from the old all-in-one package? Install the three separate map packs once. After confirming the four folders above exist, delete the old `pandaMap\Packs` folder to reclaim the duplicated space.
 
 ![The world map with the Turtle WoW islands, HD vs native](screenshots/08-world-turtle-hd-vs-native.jpg)
 
@@ -120,7 +130,7 @@ Better visuals without weighing down your game.
 
 ## Version
 
-Current release: 1.0.0
+Current release: 1.0.1
 
 [See what changed](CHANGELOG.md).
 

@@ -1,0 +1,8 @@
+## Interface: 11200
+## Title: |cffffffffPanda |cfff5ae0aMap|r - Unexplored Maps
+## Notes: HD unexplored-zone artwork for PandaMap.
+## Author: Thomas
+## Version: 1.0.0
+## Dependencies: pandaMap
+
+Register.lua

@@ -4,6 +4,9 @@ on:
   push:
     tags:
       - "v*"
+      - "world-v*"
+      - "unexplored-v*"
+      - "terrain-v*"
 
 permissions:
   contents: write
@@ -20,33 +23,85 @@ jobs:
       - name: Check out the release tag
         uses: actions/checkout@v7
 
-      - name: Validate the addon version
+      - name: Identify and validate the component
+        id: component
         shell: bash
         run: |
-          toc_version="$(sed -n 's/^## Version: //p' pandaMap.toc | tr -d '\r')"
-          tag_version="${GITHUB_REF_NAME#v}"
+          case "$GITHUB_REF_NAME" in
+            world-v*)
+              component="world"
+              folder="PandaMap_World"
+              archive="PandaMap-World.zip"
+              version="${GITHUB_REF_NAME#world-v}"
+              title="PandaMap World Maps $version"
+              ;;
+            unexplored-v*)
+              component="unexplored"
+              folder="PandaMap_Unexplored"
+              archive="PandaMap-Unexplored.zip"
+              version="${GITHUB_REF_NAME#unexplored-v}"
+              title="PandaMap Unexplored Maps $version"
+              ;;
+            terrain-v*)
+              component="terrain"
+              folder="PandaMap_Terrain"
+              archive="PandaMap-Terrain.zip"
+              version="${GITHUB_REF_NAME#terrain-v}"
+              title="PandaMap 3D Terrain $version"
+              ;;
+            v*)
+              component="core"
+              folder="pandaMap"
+              archive="PandaMap.zip"
+              version="${GITHUB_REF_NAME#v}"
+              title="PandaMap $version"
+              ;;
+            *)
+              echo "unsupported release tag: $GITHUB_REF_NAME"
+              exit 1
+              ;;
+          esac
 
-          test -n "$toc_version"
-          test "$toc_version" = "$tag_version"
-          python3 -B tools/release.py check --release "$tag_version"
-          python3 -B tools/release.py notes "$tag_version" > release-notes.md
+          if [ "$component" = "core" ]; then
+            toc_version="$(sed -n 's/^## Version: //p' pandaMap.toc | tr -d '\r')"
+            test "$toc_version" = "$version"
+            python3 -B tools/release.py check --release "$version"
+            python3 -B tools/release.py notes "$version" > release-notes.md
+          else
+            toc="Packs/$folder/$folder.toc"
+            toc_version="$(sed -n 's/^## Version: //p' "$toc" | tr -d '\r')"
+            test -n "$toc_version"
+            test "$toc_version" = "$version"
+            printf '%s\n\n%s\n' \
+              "Install this map pack beside the PandaMap core addon." \
+              "Existing core and other map-pack folders do not need replacing." \
+              > release-notes.md
+          fi
 
-      - name: Package PandaMap
+          echo "component=$component" >> "$GITHUB_OUTPUT"
+          echo "folder=$folder" >> "$GITHUB_OUTPUT"
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "title=$title" >> "$GITHUB_OUTPUT"
+
+      - name: Package the core addon
+        if: steps.component.outputs.component == 'core'
         shell: bash
         run: |
           mkdir -p package/pandaMap
+          cp -R Locales Media package/pandaMap/
+          cp *.lua README.md CHANGELOG.md package/pandaMap/
 
-          # Everything the client loads at runtime. Packs/ holds the HD map
-          # tiles; build/audit scripts, docs and tools stay out of the zip.
-          cp -R Locales Media Packs package/pandaMap/
-          cp *.lua pandaMap.toc README.md CHANGELOG.md package/pandaMap/
+          # Source checkouts load nested packs for development. Published
+          # installs use the independently packaged top-level addons.
+          grep -vF 'Packs\LegacyPacks.lua' pandaMap.toc \
+            > package/pandaMap/pandaMap.toc
 
-          # Guard against this copy list drifting from the .toc: every file
-          # the .toc lists must exist inside the package.
           missing=0
-          for entry in $(sed -e 's/\r$//' -e 's/#.*//' pandaMap.toc | tr '\\' '/'); do
+          for entry in $(sed -e 's/\r$//' -e 's/#.*//' \
+              package/pandaMap/pandaMap.toc | tr '\\' '/'); do
             if [ ! -f "package/pandaMap/$entry" ]; then
-              echo "missing from package: $entry"
+              echo "missing from core package: $entry"
               missing=1
             fi
           done
@@ -54,7 +109,31 @@ jobs:
 
           (
             cd package
-            zip -r ../PandaMap.zip pandaMap
+            zip -r "../${{ steps.component.outputs.archive }}" pandaMap
+          )
+
+      - name: Package the map addon
+        if: steps.component.outputs.component != 'core'
+        shell: bash
+        run: |
+          folder="${{ steps.component.outputs.folder }}"
+          archive="${{ steps.component.outputs.archive }}"
+          mkdir -p package
+          cp -R "Packs/$folder" "package/$folder"
+
+          missing=0
+          for entry in $(sed -e 's/\r$//' -e 's/#.*//' \
+              "package/$folder/$folder.toc" | tr '\\' '/'); do
+            if [ ! -f "package/$folder/$entry" ]; then
+              echo "missing from $folder package: $entry"
+              missing=1
+            fi
+          done
+          test "$missing" -eq 0
+
+          (
+            cd package
+            zip -r "../$archive" "$folder"
           )
 
       - name: Create the GitHub release
@@ -62,8 +141,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          gh release create "$GITHUB_REF_NAME" PandaMap.zip \
+          latest="--latest=false"
+          if [ "${{ steps.component.outputs.component }}" = "core" ]; then
+            latest="--latest"
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            "${{ steps.component.outputs.archive }}" \
             --verify-tag \
-            --title "PandaMap ${GITHUB_REF_NAME#v}" \
+            --title "${{ steps.component.outputs.title }}" \
             --notes-file release-notes.md \
-            --latest
+            "$latest"

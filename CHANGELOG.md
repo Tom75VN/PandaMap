@@ -4,6 +4,20 @@ Player-visible PandaMap changes, newest first. Keep every bullet short, clear an
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-10-30
+
+### Changed
+
+- Map packs install separately, so core updates no longer redownload unchanged artwork.
+
+### Fixed
+
+- Without PandaUI, the minimap and World Map show the player arrow again.
+
+### Removed
+
+- Opening the World Map no longer shows the misplaced player ping.
+
 ## [1.0.0] - 2026-10-28
 
 ### Added
